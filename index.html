@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Redirect Checker Pro</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans min-h-screen flex flex-col">
+
+    <div class="container mx-auto px-4 py-12 max-w-3xl flex-grow">
+        <header class="text-center mb-10">
+            <h1 class="text-4xl font-extrabold text-slate-900 tracking-tight mb-2">
+                <i class="fa-solid fa-compass-drafting text-blue-600 mr-2"></i>Redirect Checker
+            </h1>
+            <p class="text-lg text-slate-600">Verifică statusul HTTP și lanțul complet de redirecturi pentru orice URL.</p>
+        </header>
+
+        <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-8">
+            <form id="redirectForm" class="flex flex-col sm:flex-row gap-3">
+                <input 
+                    type="url" 
+                    id="urlInput" 
+                    placeholder="https://example.com" 
+                    required 
+                    class="flex-grow px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 text-base"
+                >
+                <button 
+                    type="submit" 
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-6 py-3 rounded-xl transition duration-200 flex items-center justify-center gap-2 cursor-pointer"
+                >
+                    <i class="fa-solid fa-magnifying-glass"></i> Analizează
+                </button>
+            </form>
+        </div>
+
+        <div id="loading" class="hidden text-center py-8">
+            <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-slate-300 border-t-blue-600 mb-2"></div>
+            <p class="text-slate-500">Se analizează traseul URL-ului...</p>
+        </div>
+
+        <div id="resultsContainer" class="hidden space-y-6">
+            <h2 class="text-xl font-bold text-slate-900 flex items-center gap-2">
+                <i class="fa-solid fa-route text-slate-500"></i> Lanțul de redirecționare:
+            </h2>
+            
+            <div id="redirectChain" class="space-y-4 relative before:absolute before:bottom-6 before:top-6 before:left-6 before:w-0.5 before:bg-slate-200">
+                </div>
+        </div>
+    </div>
+
+    <footer class="bg-white border-t border-slate-200 py-6 text-center text-sm text-slate-500">
+        &copy; 2026 Redirect Checker — Creat cu GitHub Pages
+    </footer>
+
+    <script>
+        document.getElementById('redirectForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const urlInput = document.getElementById('urlInput').value.trim();
+            const loading = document.getElementById('loading');
+            const resultsContainer = document.getElementById('resultsContainer');
+            const redirectChain = document.getElementById('redirectChain');
+            
+            // Resetare interfață
+            loading.classList.remove('hidden');
+            resultsContainer.classList.add('hidden');
+            redirectChain.innerHTML = '';
+
+            try {
+                // Folosim un serviciu public de proxy pentru a ocoli CORS și a obține headers (redirect-ul)
+                // Folosim MyAllOrigins sau o alternativă similară pentru demo clean
+                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(urlInput)}`;
+                
+                const response = await fetch(proxyUrl);
+                if (!response.ok) throw new Error('Eroare la comunicarea cu serverul proxy.');
+                
+                const data = await response.json();
+                
+                // AllOrigins returnează un obiect cu statusul original și URL-ul final dacă a fost redirectat
+                const finalUrl = data.status.url;
+                const isRedirected = finalUrl !== urlInput;
+
+                loading.classList.add('hidden');
+                resultsContainer.classList.remove('hidden');
+
+                // Pasul 1: URL Initial
+                if (isRedirected) {
+                    appendStep(urlInput, "301 / 302", "Redirecționat", "border-amber-500 text-amber-700 bg-amber-50", "fa-right-from-bracket");
+                    // Pasul 2: URL Final
+                    appendStep(finalUrl, "200 OK", "Destinație Finală", "border-emerald-500 text-emerald-700 bg-emerald-50", "fa-check");
+                } else {
+                    // Fără redirect
+                    appendStep(urlInput, "200 OK", "Direct (Fără redirect)", "border-emerald-500 text-emerald-700 bg-emerald-50", "fa-link");
+                }
+
+            } catch (error) {
+                loading.classList.add('hidden');
+                alert('A apărut o eroare: ' + error.message);
+            }
+        });
+
+        function appendStep(url, status, statusTxt, badgeClasses, icon) {
+            const chain = document.getElementById('redirectChain');
+            
+            const stepHtml = `
+                <div class="flex items-start gap-4 relative z-10 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+                    <div class="flex items-center justify-center w-12 h-12 rounded-full bg-slate-100 text-slate-600 shrink-0">
+                        <i class="fa-solid ${icon} text-lg"></i>
+                    </div>
+                    <div class="flex-grow min-w-0">
+                        <div class="flex flex-wrap items-center gap-2 mb-1">
+                            <span class="px-2.5 py-0.5 rounded-md text-xs font-bold uppercase tracking-wider ${badgeClasses}">
+                                ${status}
+                            </span>
+                            <span class="text-sm font-medium text-slate-500">${statusTxt}</span>
+                        </div>
+                        <p class="text-sm md:text-base font-mono text-slate-800 break-all select-all">${url}</p>
+                    </div>
+                </div>
+            `;
+            chain.insertAdjacentHTML('beforeend', stepHtml);
+        }
+    </script>
+</body>
+</html>
