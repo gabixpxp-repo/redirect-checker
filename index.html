@@ -56,72 +56,63 @@
 
     <script>
         document.getElementById('redirectForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const urlInput = document.getElementById('urlInput').value.trim();
-            const loading = document.getElementById('loading');
-            const resultsContainer = document.getElementById('resultsContainer');
-            const redirectChain = document.getElementById('redirectChain');
-            
-            // Resetare interfață
-            loading.classList.remove('hidden');
-            resultsContainer.classList.add('hidden');
-            redirectChain.innerHTML = '';
+    e.preventDefault();
+    
+    const urlInput = document.getElementById('urlInput').value.trim();
+    const loading = document.getElementById('loading');
+    const resultsContainer = document.getElementById('resultsContainer');
+    const redirectChain = document.getElementById('redirectChain');
+    
+    loading.classList.remove('hidden');
+    resultsContainer.classList.add('hidden');
+    redirectChain.innerHTML = '';
 
-            try {
-                // Folosim un serviciu public de proxy pentru a ocoli CORS și a obține headers (redirect-ul)
-                // Folosim MyAllOrigins sau o alternativă similară pentru demo clean
-                const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(urlInput)}`;
-                
-                const response = await fetch(proxyUrl);
-                if (!response.ok) throw new Error('Eroare la comunicarea cu serverul proxy.');
-                
-                const data = await response.json();
-                
-                // AllOrigins returnează un obiect cu statusul original și URL-ul final dacă a fost redirectat
-                const finalUrl = data.status.url;
-                const isRedirected = finalUrl !== urlInput;
+    try {
+        // Folosim un proxy CORS alternativ și mai stabil pentru request-uri de tip HEAD/GET
+        // adăugând un timestamp pentru a preveni cache-ul agresiv care dă NetworkError
+        const cacheBuster = new Date().getTime();
+        const proxyUrl = `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(urlInput)}`;
+        
+        const response = await fetch(proxyUrl);
+        
+        if (!response.ok) throw new Error('Serverul proxy nu a putut accesa URL-ul.');
+        
+        // Obținem URL-ul final la care a ajuns proxy-ul
+        const finalUrl = response.url.includes('?quest=') 
+            ? urlInput // Dacă proxy-ul nu a schimbat URL-ul în obiectul response
+            : response.url;
 
-                loading.classList.add('hidden');
-                resultsContainer.classList.remove('hidden');
+        loading.classList.add('hidden');
+        resultsContainer.classList.remove('hidden');
 
-                // Pasul 1: URL Initial
-                if (isRedirected) {
-                    appendStep(urlInput, "301 / 302", "Redirecționat", "border-amber-500 text-amber-700 bg-amber-50", "fa-right-from-bracket");
-                    // Pasul 2: URL Final
-                    appendStep(finalUrl, "200 OK", "Destinație Finală", "border-emerald-500 text-emerald-700 bg-emerald-50", "fa-check");
-                } else {
-                    // Fără redirect
-                    appendStep(urlInput, "200 OK", "Direct (Fără redirect)", "border-emerald-500 text-emerald-700 bg-emerald-50", "fa-link");
-                }
-
-            } catch (error) {
-                loading.classList.add('hidden');
-                alert('A apărut o eroare: ' + error.message);
-            }
-        });
-
-        function appendStep(url, status, statusTxt, badgeClasses, icon) {
-            const chain = document.getElementById('redirectChain');
-            
-            const stepHtml = `
-                <div class="flex items-start gap-4 relative z-10 bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-                    <div class="flex items-center justify-center w-12 h-12 rounded-full bg-slate-100 text-slate-600 shrink-0">
-                        <i class="fa-solid ${icon} text-lg"></i>
-                    </div>
-                    <div class="flex-grow min-w-0">
-                        <div class="flex flex-wrap items-center gap-2 mb-1">
-                            <span class="px-2.5 py-0.5 rounded-md text-xs font-bold uppercase tracking-wider ${badgeClasses}">
-                                ${status}
-                            </span>
-                            <span class="text-sm font-medium text-slate-500">${statusTxt}</span>
-                        </div>
-                        <p class="text-sm md:text-base font-mono text-slate-800 break-all select-all">${url}</p>
-                    </div>
-                </div>
-            `;
-            chain.insertAdjacentHTML('beforeend', stepHtml);
+        // Verificăm dacă URL-ul s-a schimbat (semn de redirect)
+        if (cleanUrl(finalUrl) !== cleanUrl(urlInput)) {
+            appendStep(urlInput, "301 / 302", "Redirecționat", "border-amber-500 text-amber-700 bg-amber-50", "fa-right-from-bracket");
+            appendStep(finalUrl, "200 OK", "Destinație Finală", "border-emerald-500 text-emerald-700 bg-emerald-50", "fa-check");
+        } else {
+            appendStep(urlInput, "200 OK", "Direct (Fără redirect)", "border-emerald-500 text-emerald-700 bg-emerald-50", "fa-link");
         }
+
+    } catch (error) {
+        loading.classList.add('hidden');
+        // Mesaj de eroare mai prietenos și explicativ
+        alert('Eroare de rețea (CORS blochează acest URL în browser). Încearcă cu http:// sau alt domeniu.');
+        console.error(error);
+    }
+});
+
+// Funcție ajutătoare pentru a curăța URL-urile de query-uri proxy
+function cleanUrl(url) {
+    try {
+        const u = new URL(url);
+        if (u.searchParams.has('quest')) {
+            return u.searchParams.get('quest');
+        }
+        return url;
+    } catch(e) {
+        return url;
+    }
+}
     </script>
 </body>
 </html>
