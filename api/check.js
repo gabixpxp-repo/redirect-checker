@@ -1,88 +1,107 @@
-import https from 'https';
-import http from 'http';
-import { URL } from 'url';
-
 export default async function handler(req, res) {
     let targetUrl = req.query.url;
 
     if (!targetUrl) {
-        return res.status(400).json({ error: "URL lipsă" });
+        return res.status(400).json({ error: "Te rog introdu un URL valid." });
     }
 
-    // Preluăm exact comportamentul din exemplul tău: pornim mereu de la o bază clară
+    // Auto-adaugă http:// dacă utilizatorul a uitat
     if (!targetUrl.startsWith('http')) {
         targetUrl = 'http://' + targetUrl;
     }
 
-    const chain = [];
-    let currentUrl = targetUrl;
-    let maxRedirects = 10;
+    try {
+        const chain = [];
+        let currentUrl = targetUrl;
+        let maxRedirects = 15;
+        
+        // Păstrăm cookie-urile ca să ocolim firewall-urile (WAF) la pașii următori
+        let cookies = []; 
 
-    // Construim o cerere brută (raw request) la nivel de server
-    const makeRawRequest = (urlStr) => {
-        return new Promise((resolve, reject) => {
-            const parsedUrl = new URL(urlStr);
-            // Alegem protocolul corect pentru saltul curent
-            const protocol = parsedUrl.protocol === 'https:' ? https : http;
-            
-            const options = {
-                method: 'GET',
-                // Evităm decodarea automată a serverului, vrem doar Headerele
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Connection': 'close' 
-                }
+        while (maxRedirects > 0) {
+            const headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
             };
 
-            const request = protocol.request(options, (response) => {
-                resolve({
-                    status: response.statusCode,
-                    location: response.headers['location']
-                });
+            // Injectăm cookie-urile acumulate anterior
+            if (cookies.length > 0) {
+                headers['Cookie'] = cookies.join('; ');
+            }
+
+            const response = await fetch(currentUrl, { 
+                method: 'GET',
+                headers: headers,
+                redirect: 'manual' 
             });
 
-            request.on('error', (err) => reject(err));
+            const status = response.status;
             
-            // Setăm un timeout de 5 secunde pentru a nu bloca aplicația la site-uri picate
-            request.setTimeout(5000, () => {
-                request.destroy();
-                resolve({ status: 'Timeout', location: null });
-            });
+            // Salvăm cookie-urile noi setate de server pentru a dovedi că suntem un browser cuminte
+            const setCookie = response.headers.get('set-cookie');
+            if (setCookie) {
+                // Fetch le concatenează, noi le spargem pentru a le stoca
+                const newCookies = setCookie.split(',').map(c => c.split(';')[0].trim());
+                cookies = [...new Set([...cookies, ...newCookies])];
+            }
             
-            request.end();
-        });
-    };
-
-    try {
-        while (maxRedirects > 0) {
-            const { status, location } = await makeRawRequest(currentUrl);
-
-            // Verificăm dacă serverul returnează clar un cod de redirect (301, 302, 307, 308)
-            if (typeof status === 'number' && status >= 300 && status < 400 && location) {
-                // Exact ca structura Ayima: înregistrăm saltul de pe server
-                chain.push({ url: currentUrl, status: status, type: 'server_redirect' });
+            // CAZUL 1: Redirect HTTP Standard (din server)
+            if (status >= 300 && status < 400 && response.headers.has('location')) {
+                chain.push({ url: currentUrl, status: status, type: 'Redirect HTTP Standard' });
                 
-                let nextUrl = location;
-                // Corectăm redirecturile relative (ex: /contact)
-                if (!nextUrl.startsWith('http')) {
-                    nextUrl = new URL(nextUrl, currentUrl).href;
+                let location = response.headers.get('location');
+                if (!location.startsWith('http')) {
+                    location = new URL(location, currentUrl).href;
                 }
-                currentUrl = nextUrl;
+                currentUrl = location;
                 maxRedirects--;
-            } else {
-                // Am ajuns la destinația finală (ex: 200) sau o eroare (ex: 403, 404)
-                let typeText = status === 200 ? 'normal' : 'error/blocked';
-                chain.push({ url: currentUrl, status: status, type: typeText });
+            } 
+            // CAZUL 2: WAF Bypass / JavaScript Redirect / Meta Refresh
+            else if (status === 200) {
+                const text = await response.text();
+                
+                // Căutăm Meta Refresh-uri HTML
+                const metaMatch = text.match(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*content=["']?[0-9]+;\s*url=["']?([^"'>]+)["']?[^>]*>/i);
+                
+                // Căutăm JavaScript Redirect (ex: window.location.href="https...")
+                const jsMatch = text.match(/(?:window\.)?location(?:\.href|\.replace)?\s*=\s*['"]([^'"]+)['"]/i);
+                
+                if (metaMatch && metaMatch[1]) {
+                    chain.push({ url: currentUrl, status: 200, type: 'Redirect HTML (Meta Refresh)' });
+                    let location = metaMatch[1].trim();
+                    if (!location.startsWith('http')) {
+                        location = new URL(location, currentUrl).href;
+                    }
+                    currentUrl = location;
+                    maxRedirects--;
+                } 
+                else if (jsMatch && jsMatch[1]) {
+                    chain.push({ url: currentUrl, status: 200, type: 'Redirect JavaScript (Securitate)' });
+                    let location = jsMatch[1].trim();
+                    if (!location.startsWith('http')) {
+                        location = new URL(location, currentUrl).href;
+                    }
+                    currentUrl = location;
+                    maxRedirects--;
+                } 
+                else {
+                    chain.push({ url: currentUrl, status: status, type: 'Destinație Finală' });
+                    break;
+                }
+            } 
+            // CAZUL 3: Block / Eroare
+            else {
+                chain.push({ url: currentUrl, status: status, type: 'Status Code: Eroare sau Firewall' });
                 break;
             }
         }
         
         return res.status(200).json({ chain });
-        
+
     } catch (error) {
-        // Dacă WAF-ul taie conexiunea brutal
-        chain.push({ url: currentUrl, status: 'Network Error', type: 'WAF Blocked or DNS fail' });
-        return res.status(200).json({ chain }); 
+        return res.status(500).json({ error: "Eroare internă de rețea sau SSL: " + error.message });
     }
 }
