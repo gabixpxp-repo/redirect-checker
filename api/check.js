@@ -8,32 +8,63 @@ export default async function handler(req, res) {
     try {
         const chain = [];
         let currentUrl = targetUrl;
-        let maxRedirects = 10; // Prevenim buclele infinite
+        let maxRedirects = 15; // Puțin mai mare pentru site-uri complexe
 
         while (maxRedirects > 0) {
-            // Facem cererea de pe server, oprind redirectul automat
-            const response = await fetch(currentUrl, { redirect: 'manual' });
+            // Falsificăm un browser real pentru a trece de firewall-uri
+            const headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7'
+            };
+
+            const response = await fetch(currentUrl, { 
+                method: 'GET',
+                headers: headers,
+                redirect: 'manual' 
+            });
+
             const status = response.status;
             
-            // Dacă primim cod de redirect (301, 302, 307, 308)
+            // 1. Verificăm dacă e un redirect HTTP clasic (din server)
             if (status >= 300 && status < 400 && response.headers.has('location')) {
-                chain.push({ url: currentUrl, status: status });
+                chain.push({ url: currentUrl, status: status, type: 'Redirect Server' });
                 
                 let location = response.headers.get('location');
-                // Gestionăm redirecturile relative (ex: /pagina-noua)
                 if (!location.startsWith('http')) {
                     location = new URL(location, currentUrl).href;
                 }
                 currentUrl = location;
                 maxRedirects--;
-            } else {
-                // Am ajuns la destinația finală (200 OK, 404, etc.)
-                chain.push({ url: currentUrl, status: status });
+            } 
+            // 2. Dacă pare că a ajuns la destinație (200 OK), verificăm codul paginii
+            else if (status === 200) {
+                const text = await response.text();
+                // Expresie regulată pentru a găsi <meta http-equiv="refresh" content="0; url=...">
+                const metaRefreshMatch = text.match(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*content=["']?[0-9]+;\s*url=["']?([^"'>]+)["']?[^>]*>/i);
+                
+                if (metaRefreshMatch && metaRefreshMatch[1]) {
+                    chain.push({ url: currentUrl, status: 200, type: 'Redirect HTML (Meta)' });
+                    
+                    let location = metaRefreshMatch[1].trim();
+                    if (!location.startsWith('http')) {
+                        location = new URL(location, currentUrl).href;
+                    }
+                    currentUrl = location;
+                    maxRedirects--;
+                } else {
+                    // Dacă nu există redirect în HTML, ne oprim. Suntem la destinație.
+                    chain.push({ url: currentUrl, status: status, type: 'Destinație Finală' });
+                    break;
+                }
+            } 
+            // 3. Orice altă eroare (403, 404, 500)
+            else {
+                chain.push({ url: currentUrl, status: status, type: 'Status Code / Eroare' });
                 break;
             }
         }
         
-        // Returnăm lanțul de redirecturi către frontend-ul nostru
         return res.status(200).json({ chain });
 
     } catch (error) {
