@@ -5,7 +5,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: "Te rog introdu un URL valid." });
     }
 
-    // Auto-adaugă http:// dacă utilizatorul a uitat
+    // Adăugăm http:// automat dacă lipsește, exact ca să pornim de la baza rețelei
     if (!targetUrl.startsWith('http')) {
         targetUrl = 'http://' + targetUrl;
     }
@@ -15,7 +15,7 @@ export default async function handler(req, res) {
         let currentUrl = targetUrl;
         let maxRedirects = 15;
         
-        // Păstrăm cookie-urile ca să ocolim firewall-urile (WAF) la pașii următori
+        // Memoria pentru cookie-uri (esențială pentru a trece de pașii 2 și 3 la corporații)
         let cookies = []; 
 
         while (maxRedirects > 0) {
@@ -27,7 +27,7 @@ export default async function handler(req, res) {
                 'Upgrade-Insecure-Requests': '1'
             };
 
-            // Injectăm cookie-urile acumulate anterior
+            // Trimitem cookie-urile primite la pasul anterior
             if (cookies.length > 0) {
                 headers['Cookie'] = cookies.join('; ');
             }
@@ -35,22 +35,21 @@ export default async function handler(req, res) {
             const response = await fetch(currentUrl, { 
                 method: 'GET',
                 headers: headers,
-                redirect: 'manual' 
+                redirect: 'manual' // Oprim redirectul automat pentru a-l înregistra noi în listă
             });
 
             const status = response.status;
             
-            // Salvăm cookie-urile noi setate de server pentru a dovedi că suntem un browser cuminte
+            // Colectăm cookie-urile noi pentru pasul următor
             const setCookie = response.headers.get('set-cookie');
             if (setCookie) {
-                // Fetch le concatenează, noi le spargem pentru a le stoca
                 const newCookies = setCookie.split(',').map(c => c.split(';')[0].trim());
                 cookies = [...new Set([...cookies, ...newCookies])];
             }
             
-            // CAZUL 1: Redirect HTTP Standard (din server)
+            // PASUL A: Redirect HTTP Clasic (301, 302, 307, 308)
             if (status >= 300 && status < 400 && response.headers.has('location')) {
-                chain.push({ url: currentUrl, status: status, type: 'Redirect HTTP Standard' });
+                chain.push({ url: currentUrl, status: status, type: 'server_redirect' });
                 
                 let location = response.headers.get('location');
                 if (!location.startsWith('http')) {
@@ -59,18 +58,18 @@ export default async function handler(req, res) {
                 currentUrl = location;
                 maxRedirects--;
             } 
-            // CAZUL 2: WAF Bypass / JavaScript Redirect / Meta Refresh
+            // PASUL B: Pagina s-a încărcat (200 OK), dar verificăm dacă are scripturi ascunse de redirect
             else if (status === 200) {
                 const text = await response.text();
                 
-                // Căutăm Meta Refresh-uri HTML
+                // Căutăm Meta Refresh în HTML
                 const metaMatch = text.match(/<meta[^>]*http-equiv=["']?refresh["']?[^>]*content=["']?[0-9]+;\s*url=["']?([^"'>]+)["']?[^>]*>/i);
                 
-                // Căutăm JavaScript Redirect (ex: window.location.href="https...")
+                // Căutăm JavaScript Redirect în pagină
                 const jsMatch = text.match(/(?:window\.)?location(?:\.href|\.replace)?\s*=\s*['"]([^'"]+)['"]/i);
                 
                 if (metaMatch && metaMatch[1]) {
-                    chain.push({ url: currentUrl, status: 200, type: 'Redirect HTML (Meta Refresh)' });
+                    chain.push({ url: currentUrl, status: 200, type: 'meta_refresh_redirect' });
                     let location = metaMatch[1].trim();
                     if (!location.startsWith('http')) {
                         location = new URL(location, currentUrl).href;
@@ -79,7 +78,7 @@ export default async function handler(req, res) {
                     maxRedirects--;
                 } 
                 else if (jsMatch && jsMatch[1]) {
-                    chain.push({ url: currentUrl, status: 200, type: 'Redirect JavaScript (Securitate)' });
+                    chain.push({ url: currentUrl, status: 200, type: 'js_redirect' });
                     let location = jsMatch[1].trim();
                     if (!location.startsWith('http')) {
                         location = new URL(location, currentUrl).href;
@@ -88,13 +87,14 @@ export default async function handler(req, res) {
                     maxRedirects--;
                 } 
                 else {
-                    chain.push({ url: currentUrl, status: status, type: 'Destinație Finală' });
+                    // Nu mai există niciun redirect, am ajuns la destinația finală securizată
+                    chain.push({ url: currentUrl, status: status, type: 'normal' });
                     break;
                 }
             } 
-            // CAZUL 3: Block / Eroare
+            // PASUL C: Eroare directă din server (403, 404, etc.)
             else {
-                chain.push({ url: currentUrl, status: status, type: 'Status Code: Eroare sau Firewall' });
+                chain.push({ url: currentUrl, status: status, type: 'error' });
                 break;
             }
         }
@@ -102,6 +102,6 @@ export default async function handler(req, res) {
         return res.status(200).json({ chain });
 
     } catch (error) {
-        return res.status(500).json({ error: "Eroare internă de rețea sau SSL: " + error.message });
+        return res.status(500).json({ error: "Eroare la procesarea URL-ului: " + error.message });
     }
 }
