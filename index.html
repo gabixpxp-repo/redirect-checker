@@ -82,27 +82,25 @@
                 loading.classList.add('hidden');
                 resultsContainer.classList.remove('hidden');
 
-                // Generăm HTML-ul pentru fiecare pas exact așa cum vine de la server
+                // Generăm HTML-ul pentru fiecare pas
                 data.chain.forEach((step, index) => {
                     const isLast = index === data.chain.length - 1;
                     const isRedirect = step.status >= 300 && step.status < 400;
                     
                     let badgeClasses = "border-slate-500 text-slate-700 bg-slate-50";
                     let icon = "fa-link";
-                    let statusTxt = "Finalizat";
+                    // Acum folosim tipul de redirect trimis de serverul nostru
+                    let statusTxt = step.type || "Analizat";
 
-                    if (isRedirect) {
+                    if (isRedirect || step.type.includes('Meta')) {
                         badgeClasses = "border-amber-500 text-amber-700 bg-amber-50";
                         icon = "fa-right-from-bracket";
-                        statusTxt = "Redirecționat";
                     } else if (step.status === 200) {
                         badgeClasses = "border-emerald-500 text-emerald-700 bg-emerald-50";
                         icon = "fa-check";
-                        statusTxt = "OK / Destinație Finală";
                     } else if (step.status >= 400) {
                         badgeClasses = "border-red-500 text-red-700 bg-red-50";
                         icon = "fa-triangle-exclamation";
-                        statusTxt = "Eroare / Nu a fost găsit";
                     }
 
                     appendStep(step.url, `HTTP ${step.status}`, statusTxt, badgeClasses, icon);
